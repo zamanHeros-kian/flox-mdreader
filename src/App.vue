@@ -6,38 +6,51 @@
         :layoutMode="settingsStore.layoutMode"
         :themeMode="settingsStore.themeMode"
         :sidebarVisible="settingsStore.sidebarVisible"
+        :ai-panel-open="aiPanelVisible"
         :title="windowTitle"
         @toggle-layout="settingsStore.setLayoutMode($event)"
         @toggle-sidebar="settingsStore.toggleSidebar()"
         @cycle-theme="settingsStore.cycleTheme()"
+        @toggle-ai="toggleAIPanel"
         @format="handleFormat"
       />
       <TabBar />
       <SearchBar />
-      <div class="app-main">
-        <Transition name="sidebar-slide">
+    <div class="app-main">
+      <Transition name="sidebar-slide">
+        <div
+          v-if="settingsStore.sidebarVisible"
+          class="sidebar-shell"
+          :style="{
+            width: `${settingsStore.sidebarWidth}px`,
+            '--sidebar-min-width': `${SIDEBAR_MIN_WIDTH}px`,
+            '--sidebar-max-width': `${SIDEBAR_MAX_WIDTH}px`,
+          }"
+        >
+          <Sidebar />
           <div
-            v-if="settingsStore.sidebarVisible"
-            class="sidebar-shell"
-            :style="{
-              width: `${settingsStore.sidebarWidth}px`,
-              '--sidebar-min-width': `${SIDEBAR_MIN_WIDTH}px`,
-              '--sidebar-max-width': `${SIDEBAR_MAX_WIDTH}px`,
-            }"
-          >
-            <Sidebar />
-            <div
-              class="sidebar-resizer"
-              title="Resize sidebar"
-              @pointerdown="startSidebarResize"
-            ></div>
-          </div>
-        </Transition>
-        <EditorLayout :layoutMode="settingsStore.layoutMode">
-          <template #editor><TextEditor /></template>
-          <template #preview><MarkdownPreview /></template>
-        </EditorLayout>
-      </div>
+            class="sidebar-resizer"
+            title="Resize sidebar"
+            @pointerdown="startSidebarResize"
+          ></div>
+        </div>
+      </Transition>
+      <EditorLayout :layoutMode="settingsStore.layoutMode">
+        <template #editor><TextEditor /></template>
+        <template #preview><MarkdownPreview /></template>
+      </EditorLayout>
+      <Transition name="ai-panel-slide">
+        <AIPanel
+          v-if="aiPanelVisible"
+          :selected-text="selectedText"
+          :document-content="editorStore.content"
+          @close="aiPanelVisible = false"
+          @insert-at-cursor="handleAIInsert"
+          @replace-selection="handleAIReplace"
+          @append-to-document="handleAIAppend"
+        />
+      </Transition>
+    </div>
     </div>
     <UnsavedChangesDialog />
     <AboutDialog />
@@ -47,7 +60,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, watch } from 'vue';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH, useSettingsStore } from './stores/settings';
 import { useEditorStore } from './stores/editor';
 import TitleBar from './components/TitleBar.vue';
@@ -63,6 +76,8 @@ import UnsavedChangesDialog from './components/UnsavedChangesDialog.vue';
 import AboutDialog from './components/AboutDialog.vue';
 import SettingsDialog from './components/SettingsDialog.vue';
 import QuickOpenPalette from './components/QuickOpenPalette.vue';
+import AIPanel from './components/AIPanel.vue';
+import { loadAISettings } from './composables/useAI';
 import {
   saveFile,
   updateWindowTitle,
@@ -98,6 +113,53 @@ useFileWatch(editorStore);
 useWorkspaceWatch();
 useAutoSave(editorStore);
 useSessionRestore(editorStore);
+
+// ── AI Panel state ─────────────────────────────────────────────────
+
+const aiPanelVisible = ref(false);
+const selectedText = ref('');
+
+function updateSelectedText() {
+  const view = getEditorView();
+  if (!view) {
+    selectedText.value = '';
+    return;
+  }
+  const { from, to } = view.state.selection.main;
+  selectedText.value = from < to ? view.state.doc.sliceString(from, to) : '';
+}
+
+function handleAIInsert(text: string) {
+  const view = getEditorView();
+  if (!view) return;
+  const { from } = view.state.selection.main;
+  view.dispatch({ changes: { from, insert: text } });
+}
+
+function handleAIReplace(text: string) {
+  const view = getEditorView();
+  if (!view) return;
+  const { from, to } = view.state.selection.main;
+  view.dispatch({ changes: { from, to, insert: text } });
+}
+
+function handleAIAppend(text: string) {
+  const view = getEditorView();
+  if (!view) return;
+  const end = view.state.doc.length;
+  view.dispatch({ changes: { from: end, insert: '\n\n' + text } });
+}
+
+function toggleAIPanel() {
+  aiPanelVisible.value = !aiPanelVisible.value;
+}
+
+function handleAIKeydown(e: KeyboardEvent) {
+  if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'A') {
+    e.preventDefault();
+    toggleAIPanel();
+  }
+}
 
 const handleFormat = (format: string) => applyFormat(format, getEditorView());
 
@@ -214,6 +276,19 @@ onMounted(async () => {
   } catch (e) {
     console.warn('Native menu setup failed:', e);
   }
+
+  // Load AI settings
+  try {
+    await loadAISettings();
+  } catch (e) {
+    console.warn('AI settings load failed:', e);
+  }
+
+  // Track selection changes for AI context
+  document.addEventListener('selectionchange', updateSelectedText);
+
+  // Keyboard shortcut: Ctrl/Cmd+Shift+A to toggle AI panel
+  window.addEventListener('keydown', handleAIKeydown);
 
   // Restore the last workspace quietly. Persisted Tauri scopes normally make
   // this transparent; a moved/deleted/inaccessible folder leaves the sidebar
@@ -334,6 +409,8 @@ onMounted(async () => {
 onUnmounted(() => {
   stopSidebarResize();
   cleanupTauriEventListeners([unlistenClose, unlistenDrop, unlistenFileOpen, unlistenFocus]);
+  document.removeEventListener('selectionchange', updateSelectedText);
+  window.removeEventListener('keydown', handleAIKeydown);
 });
 </script>
 
@@ -440,7 +517,18 @@ body.is-resizing-sidebar {
   opacity: 0;
 }
 
-/* Search match highlights in the rendered preview (CSS Custom Highlight API). */
+/* AI Panel slide animation */
+.ai-panel-slide-enter-active,
+.ai-panel-slide-leave-active {
+  transition: width 0.2s ease, min-width 0.2s ease, opacity 0.2s ease;
+}
+
+.ai-panel-slide-enter-from,
+.ai-panel-slide-leave-to {
+  width: 0;
+  min-width: 0;
+  opacity: 0;
+}
 ::highlight(texodus-search) {
   background-color: var(--search-highlight-soft);
 }

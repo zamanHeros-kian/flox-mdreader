@@ -183,6 +183,166 @@
               @update:model-value="settingsStore.setColorScheme($event)"
             />
           </div>
+
+          <!-- AI Settings Section -->
+          <div class="settings-section">
+            <span class="section-label">AI Providers</span>
+
+            <div class="ai-settings-section">
+              <div class="ai-settings-heading">Mistral API Key</div>
+              <div class="ai-key-row">
+                <input
+                  type="password"
+                  v-model="aiSettings.mistralApiKey.value"
+                  class="ai-input"
+                  placeholder="sk-…"
+                  autocomplete="off"
+                />
+                <button
+                  class="ai-test-btn"
+                  :class="{
+                    'ai-test-btn--ok': aiTestResult['mistral'] === 'success',
+                    'ai-test-btn--err': aiTestResult['mistral'] && aiTestResult['mistral'] !== 'success',
+                  }"
+                  @click="handleTestAIConnection('mistral')"
+                  :disabled="aiTesting === 'mistral' || !aiSettings.mistralApiKey.value"
+                >
+                  {{ aiTesting === 'mistral' ? '…' : aiTestResult['mistral'] === 'success' ? '✓' : aiTestResult['mistral'] ? '✗' : 'Test' }}
+                </button>
+                <button class="ai-clear-btn" @click="aiSettings.mistralApiKey.value = ''" title="Clear">✕</button>
+              </div>
+              <span v-if="aiTestResult['mistral'] && aiTestResult['mistral'] !== 'success'" class="ai-test-error">{{ aiTestResult['mistral'] }}</span>
+            </div>
+
+            <div class="ai-settings-section">
+              <div class="ai-settings-heading">OpenRouter API Key (Nemotron Ultra)</div>
+              <div class="ai-key-row">
+                <input
+                  type="password"
+                  v-model="aiSettings.openrouterApiKey.value"
+                  class="ai-input"
+                  placeholder="sk-or-…"
+                  autocomplete="off"
+                />
+                <button
+                  class="ai-test-btn"
+                  :class="{
+                    'ai-test-btn--ok': aiTestResult['nemotron'] === 'success',
+                    'ai-test-btn--err': aiTestResult['nemotron'] && aiTestResult['nemotron'] !== 'success',
+                  }"
+                  @click="handleTestAIConnection('nemotron')"
+                  :disabled="aiTesting === 'nemotron' || !aiSettings.openrouterApiKey.value"
+                >
+                  {{ aiTesting === 'nemotron' ? '…' : aiTestResult['nemotron'] === 'success' ? '✓' : aiTestResult['nemotron'] ? '✗' : 'Test' }}
+                </button>
+                <button class="ai-clear-btn" @click="aiSettings.openrouterApiKey.value = ''" title="Clear">✕</button>
+              </div>
+              <span v-if="aiTestResult['nemotron'] && aiTestResult['nemotron'] !== 'success'" class="ai-test-error">{{ aiTestResult['nemotron'] }}</span>
+            </div>
+
+            <div class="ai-settings-section">
+              <div class="ai-settings-heading">Cloudflare Worker URL (GLM 5.2)</div>
+              <input
+                type="url"
+                v-model="aiSettings.cloudflareWorkerUrl.value"
+                class="ai-input"
+                placeholder="https://your-worker.workers.dev"
+              />
+            </div>
+
+            <div class="ai-settings-section">
+              <div class="ai-settings-heading">Worker Auth Key (optional)</div>
+              <div class="ai-key-row">
+                <input
+                  type="password"
+                  v-model="aiSettings.cloudflareWorkerKey.value"
+                  class="ai-input"
+                  placeholder="Leave blank if worker is open"
+                  autocomplete="off"
+                />
+                <button
+                  class="ai-test-btn"
+                  :class="{
+                    'ai-test-btn--ok': aiTestResult['glm'] === 'success',
+                    'ai-test-btn--err': aiTestResult['glm'] && aiTestResult['glm'] !== 'success',
+                  }"
+                  @click="handleTestAIConnection('glm')"
+                  :disabled="aiTesting === 'glm' || !aiSettings.cloudflareWorkerUrl.value"
+                >
+                  {{ aiTesting === 'glm' ? '…' : aiTestResult['glm'] === 'success' ? '✓' : aiTestResult['glm'] ? '✗' : 'Test' }}
+                </button>
+                <button class="ai-clear-btn" @click="aiSettings.cloudflareWorkerKey.value = ''" title="Clear">✕</button>
+              </div>
+              <span v-if="aiTestResult['glm'] && aiTestResult['glm'] !== 'success'" class="ai-test-error">{{ aiTestResult['glm'] }}</span>
+            </div>
+
+            <div class="ai-settings-section">
+              <div class="ai-settings-heading">GLM Model Name</div>
+              <input
+                type="text"
+                v-model="aiSettings.glmModel.value"
+                class="ai-input"
+                placeholder="glm-4"
+              />
+            </div>
+
+            <!-- OpenAI Compatible Provider -->
+            <div class="ai-settings-section">
+              <div class="ai-settings-heading">OpenAI Compatible Provider</div>
+              <div class="ai-settings-sub" style="font-size: 10px; color: var(--text-muted); margin-bottom: 8px;">
+                Connect to any OpenAI-compatible API (OpenAI, Together, Groq, OpenRouter, local models, etc.)
+              </div>
+              <div style="display: flex; flex-direction: column; gap: 8px;">
+                <div>
+                  <div class="ai-settings-sub">Base URL</div>
+                  <input
+                    type="url"
+                    v-model="aiSettings.openaiBaseUrl.value"
+                    class="ai-input"
+                    placeholder="https://api.openai.com/v1"
+                  />
+                </div>
+                <div>
+                  <div class="ai-settings-sub">API Key</div>
+                  <div class="ai-key-row">
+                    <input
+                      type="password"
+                      v-model="aiSettings.openaiApiKey.value"
+                      class="ai-input"
+                      placeholder="sk-..."
+                      autocomplete="off"
+                    />
+                    <button
+                      class="ai-test-btn"
+                      :class="{
+                        'ai-test-btn--ok': aiTestResult['openai_compatible'] === 'success',
+                        'ai-test-btn--err': aiTestResult['openai_compatible'] && aiTestResult['openai_compatible'] !== 'success',
+                      }"
+                      @click="handleTestAIConnection('openai_compatible')"
+                      :disabled="aiTesting === 'openai_compatible' || !aiSettings.openaiBaseUrl.value || !aiSettings.openaiApiKey.value"
+                    >
+                      {{ aiTesting === 'openai_compatible' ? '…' : aiTestResult['openai_compatible'] === 'success' ? '✓' : aiTestResult['openai_compatible'] ? '✗' : 'Test' }}
+                    </button>
+                    <button class="ai-clear-btn" @click="aiSettings.openaiApiKey.value = ''" title="Clear">✕</button>
+                  </div>
+                  <span v-if="aiTestResult['openai_compatible'] && aiTestResult['openai_compatible'] !== 'success'" class="ai-test-error">
+                    {{ aiTestResult['openai_compatible'] }}
+                  </span>
+                </div>
+                <div>
+                  <div class="ai-settings-sub">Model Name</div>
+                  <input
+                    type="text"
+                    v-model="aiSettings.openaiModel.value"
+                    class="ai-input"
+                    placeholder="gpt-4o"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <button class="ai-save-btn" @click="handleSaveAISettings">Save AI Settings</button>
+          </div>
         </div>
       </div>
     </div>
@@ -190,7 +350,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, onUnmounted, watch } from 'vue';
+import { onMounted, onUnmounted, ref, watch } from 'vue';
 import {
   useSettingsStore,
   EDITOR_FONTS,
@@ -201,6 +361,7 @@ import {
 import SettingsStepper from './SettingsStepper.vue';
 import ColorSchemePicker from './ColorSchemePicker.vue';
 import { useSystemFonts } from '../composables/useSystemFonts';
+import { loadAISettings, saveAISettings, testConnection, aiSettings } from '../composables/useAI';
 
 const settingsStore = useSettingsStore();
 const {
@@ -210,6 +371,10 @@ const {
   previewSystemFontOptions,
   loadSystemFonts,
 } = useSystemFonts();
+
+// AI settings local state
+const aiTesting = ref(null);
+const aiTestResult = ref({});
 
 const close = () => { settingsStore.setSettingsVisible(false); };
 
@@ -223,14 +388,41 @@ const onKey = (e: KeyboardEvent) => {
 watch(
   () => settingsStore.settingsVisible,
   (visible) => {
-    if (visible) void loadSystemFonts();
+    if (visible) {
+      void loadSystemFonts();
+      void loadAISettings();
+    }
   },
 );
 
 onMounted(() => {
   window.addEventListener('keydown', onKey);
-  if (settingsStore.settingsVisible) void loadSystemFonts();
+  if (settingsStore.settingsVisible) {
+    void loadSystemFonts();
+    void loadAISettings();
+  }
 });
+
+async function handleTestAIConnection(provider: string) {
+  aiTesting.value = provider;
+  aiTestResult.value[provider] = null;
+  try {
+    await testConnection(provider);
+    aiTestResult.value = { ...aiTestResult.value, [provider]: 'success' };
+  } catch (err) {
+    aiTestResult.value = { ...aiTestResult.value, [provider]: String(err) };
+  } finally {
+    aiTesting.value = null;
+  }
+}
+
+async function handleSaveAISettings() {
+  try {
+    await saveAISettings();
+  } catch (err) {
+    console.error('[Texodus AI] Save failed:', err);
+  }
+}
 onUnmounted(() => window.removeEventListener('keydown', onKey));
 </script>
 
@@ -463,5 +655,124 @@ onUnmounted(() => window.removeEventListener('keydown', onKey));
 .fade-enter-from,
 .fade-leave-to {
   opacity: 0;
+}
+
+/* AI Settings styles */
+.ai-settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  margin-top: 8px;
+}
+
+.ai-settings-heading {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-color);
+  margin-bottom: 2px;
+}
+
+.ai-key-row {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.ai-key-row .ai-input {
+  flex: 1;
+}
+
+.ai-input {
+  width: 100%;
+  padding: 6px 9px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-color);
+  color: var(--text-color);
+  font-size: 12px;
+  font-family: inherit;
+  box-sizing: border-box;
+  transition: border-color 0.12s;
+}
+
+.ai-input:focus {
+  outline: none;
+  border-color: var(--accent-color);
+}
+
+.ai-test-btn {
+  padding: 6px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-color);
+  color: var(--text-color);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 500;
+  min-width: 48px;
+  transition: all 0.12s;
+}
+
+.ai-test-btn:hover:not(:disabled) {
+  background: var(--btn-hover);
+}
+
+.ai-test-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.ai-test-btn--ok {
+  background: var(--accent-subtle);
+  border-color: var(--accent-color);
+  color: var(--accent-color);
+}
+
+.ai-test-btn--err {
+  background: var(--blockquote-bg);
+  border-color: var(--danger-color);
+  color: var(--danger-color);
+}
+
+.ai-clear-btn {
+  padding: 6px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-color);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.ai-clear-btn:hover {
+  background: var(--btn-hover);
+  color: var(--text-color);
+}
+
+.ai-test-error {
+  font-size: 10px;
+  color: var(--danger-color);
+  margin-top: 2px;
+}
+
+.ai-save-btn {
+  padding: 8px 16px;
+  background: var(--accent-color);
+  color: var(--bg-color);
+  border: none;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.15s;
+  margin-top: 8px;
+}
+
+.ai-save-btn:hover {
+  opacity: 0.85;
 }
 </style>

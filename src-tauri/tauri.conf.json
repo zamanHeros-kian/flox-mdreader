@@ -44,6 +44,9 @@
       }
     }
   },
+  "plugins": {
+    "store": {}
+  },
   "bundle": {
     "active": true,
     "targets": ["nsis", "dmg", "app", "deb", "appimage", "rpm"],

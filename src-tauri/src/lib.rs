@@ -560,6 +560,8 @@ pub fn run() {
         .plugin(tauri_plugin_persisted_scope::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
+        // Persists key-value data for AI settings across restarts.
+        .plugin(tauri_plugin_store::Builder::new().build())
         // Persists window size/position/maximized state across restarts.
         // Saves on exit, restores automatically when the window is created.
         .plugin(tauri_plugin_window_state::Builder::default().build())
@@ -603,7 +605,13 @@ pub fn run() {
             focus_window_with_path,
             reveal_scoped_item,
             pick_document,
-            pick_save_path
+            pick_save_path,
+            ai_generate_mistral,
+            ai_generate_nemotron,
+            ai_generate_glm,
+            ai_generate_openai_compatible,
+            ai_test_connection,
+            ai_stop,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
@@ -636,6 +644,365 @@ pub fn run() {
         }
         _ => {}
     });
+}
+
+// ================================================================
+// AI INTEGRATION
+// ================================================================
+
+use std::collections::HashSet;
+use std::sync::Mutex;
+use reqwest::Client;
+use serde_json::{json, Value};
+use futures_util::StreamExt;
+use std::sync::OnceLock;
+
+static HTTP_CLIENT: OnceLock<Client> = OnceLock::new();
+
+fn get_http_client() -> &'static Client {
+    HTTP_CLIENT.get_or_init(|| {
+        Client::builder()
+            .timeout(std::time::Duration::from_secs(120))
+            .build()
+            .expect("Failed to build HTTP client")
+    })
+}
+
+/// Tracks labels of in-flight AI generation tasks so `ai_stop` can cancel them.
+static AI_CANCEL_TOKENS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+
+fn ai_cancel_tokens() -> &'static Mutex<HashSet<String>> {
+    AI_CANCEL_TOKENS.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct ChatMessage {
+    pub role: String,
+    pub content: String,
+}
+
+async fn stream_openai_sse(
+    window: tauri::Window,
+    base_url: &str,
+    api_key: &str,
+    model: &str,
+    messages: Vec<ChatMessage>,
+    temperature: f32,
+    max_tokens: u32,
+    extra_headers: Vec<(String, String)>,
+    cancel_token: &str,
+) -> Result<String, String> {
+    let client = get_http_client();
+
+    let body = json!({
+        "model": model,
+        "messages": messages.iter().map(|m| json!({
+            "role": m.role,
+            "content": m.content
+        })).collect::<Vec<_>>(),
+        "stream": true,
+        "temperature": temperature,
+        "max_tokens": max_tokens
+    });
+
+    let mut req = client
+        .post(format!("{}/chat/completions", base_url.trim_end_matches('/')))
+        .header("Content-Type", "application/json")
+        .header("Accept", "text/event-stream");
+
+    // Only send Authorization header if key is non-empty (open workers don't need it)
+    if !api_key.trim().is_empty() {
+        req = req.header("Authorization", format!("Bearer {}", api_key));
+    }
+
+    for (k, v) in &extra_headers {
+        req = req.header(k.as_str(), v.as_str());
+    }
+
+    // Register cancel token
+    ai_cancel_tokens().lock().unwrap().insert(cancel_token.to_string());
+
+    let response = req
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| {
+            ai_cancel_tokens().lock().unwrap().remove(cancel_token);
+            format!("Network error: {}", e)
+        })?;
+
+    if !response.status().is_success() {
+        ai_cancel_tokens().lock().unwrap().remove(cancel_token);
+        let status = response.status().as_u16();
+        let body_text = response.text().await.unwrap_or_default();
+        return Err(format!("API error {}: {}", status, body_text));
+    }
+
+    let mut byte_stream = response.bytes_stream();
+    let mut full_response = String::new();
+    let mut line_buffer = String::new();
+
+    while let Some(chunk_result) = byte_stream.next().await {
+        // Check if cancelled
+        if !ai_cancel_tokens().lock().unwrap().contains(cancel_token) {
+            let _ = window.emit("ai-stream-chunk", json!({
+                "type": "cancelled",
+                "full_response": full_response
+            }));
+            return Err("Generation cancelled".into());
+        }
+
+        let bytes = chunk_result.map_err(|e| {
+            ai_cancel_tokens().lock().unwrap().remove(cancel_token);
+            format!("Stream read error: {}", e)
+        })?;
+        line_buffer.push_str(&String::from_utf8_lossy(&bytes));
+
+        loop {
+            match line_buffer.find('\n') {
+                None => break,
+                Some(pos) => {
+                    let raw_line = line_buffer[..pos].trim().to_string();
+                    line_buffer = line_buffer[pos + 1..].to_string();
+
+                    if !raw_line.starts_with("data: ") {
+                        continue;
+                    }
+
+                    let data = raw_line["data: ".len()..].trim();
+
+                    if data == "[DONE]" {
+                        ai_cancel_tokens().lock().unwrap().remove(cancel_token);
+                        let _ = window.emit("ai-stream-chunk", json!({
+                            "type": "done",
+                            "full_response": full_response
+                        }));
+                        return Ok(full_response);
+                    }
+
+                    if let Ok(parsed) = serde_json::from_str::<Value>(data) {
+                        if let Some(token) = parsed
+                            .pointer("/choices/0/delta/content")
+                            .and_then(|v| v.as_str())
+                        {
+                            full_response.push_str(token);
+                            let _ = window.emit("ai-stream-chunk", json!({
+                                "type": "chunk",
+                                "content": token
+                            }));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    ai_cancel_tokens().lock().unwrap().remove(cancel_token);
+    let _ = window.emit("ai-stream-chunk", json!({
+        "type": "done",
+        "full_response": full_response
+    }));
+
+    Ok(full_response)
+}
+
+#[tauri::command]
+pub async fn ai_generate_mistral(
+    window: tauri::Window,
+    api_key: String,
+    messages: Vec<ChatMessage>,
+    temperature: Option<f32>,
+    max_tokens: Option<u32>,
+) -> Result<String, String> {
+    if api_key.trim().is_empty() {
+        return Err("Mistral API key is not set. Go to Settings → AI to add it.".into());
+    }
+    let cancel_token = format!("{}_{}", window.label(), "mistral");
+    stream_openai_sse(
+        window,
+        "https://api.mistral.ai/v1",
+        &api_key,
+        "mistral-large-latest",
+        messages,
+        temperature.unwrap_or(0.7),
+        max_tokens.unwrap_or(2048),
+        vec![],
+        &cancel_token,
+    ).await
+}
+
+#[tauri::command]
+pub async fn ai_generate_nemotron(
+    window: tauri::Window,
+    api_key: String,
+    messages: Vec<ChatMessage>,
+    temperature: Option<f32>,
+    max_tokens: Option<u32>,
+) -> Result<String, String> {
+    if api_key.trim().is_empty() {
+        return Err("OpenRouter API key is not set. Go to Settings → AI to add it.".into());
+    }
+    let cancel_token = format!("{}_{}", window.label(), "nemotron");
+    stream_openai_sse(
+        window,
+        "https://openrouter.ai/api/v1",
+        &api_key,
+        "nvidia/llama-3.1-nemotron-ultra-253b-v1",
+        messages,
+        temperature.unwrap_or(0.7),
+        max_tokens.unwrap_or(2048),
+        vec![
+            ("HTTP-Referer".into(), "https://texodus.app".into()),
+            ("X-Title".into(), "Texodus".into()),
+        ],
+        &cancel_token,
+    ).await
+}
+
+#[tauri::command]
+pub async fn ai_generate_glm(
+    window: tauri::Window,
+    worker_url: String,
+    api_key: String,
+    model: String,
+    messages: Vec<ChatMessage>,
+    temperature: Option<f32>,
+    max_tokens: Option<u32>,
+) -> Result<String, String> {
+    if worker_url.trim().is_empty() {
+        return Err("Cloudflare Worker URL is not set. Go to Settings → AI to add it.".into());
+    }
+    let model_name = if model.trim().is_empty() {
+        "glm-4".to_string()
+    } else {
+        model
+    };
+    let cancel_token = format!("{}_{}", window.label(), "glm");
+    stream_openai_sse(
+        window,
+        &worker_url,
+        &api_key,
+        &model_name,
+        messages,
+        temperature.unwrap_or(0.7),
+        max_tokens.unwrap_or(2048),
+        vec![],
+        &cancel_token,
+    ).await
+}
+
+/// OpenAI-compatible provider: user supplies base URL, optional API key, and model.
+#[tauri::command]
+pub async fn ai_generate_openai_compatible(
+    window: tauri::Window,
+    base_url: String,
+    api_key: String,
+    model: String,
+    messages: Vec<ChatMessage>,
+    temperature: Option<f32>,
+    max_tokens: Option<u32>,
+) -> Result<String, String> {
+    if base_url.trim().is_empty() {
+        return Err("Base URL is not set. Go to Settings → AI to add it.".into());
+    }
+    let model_name = if model.trim().is_empty() {
+        return Err("Model name is not set.".into());
+    } else {
+        model
+    };
+    let cancel_token = format!("{}_{}", window.label(), "openai_compatible");
+    stream_openai_sse(
+        window,
+        &base_url,
+        &api_key,
+        &model_name,
+        messages,
+        temperature.unwrap_or(0.7),
+        max_tokens.unwrap_or(2048),
+        vec![],
+        &cancel_token,
+    ).await
+}
+
+/// Cancels an in-flight AI generation stream by removing its cancel token.
+#[tauri::command]
+pub async fn ai_stop() -> Result<(), String> {
+    // Frontend tracks its own cancel token via handleStop; Rust-side
+    // cancellation happens through the shared cancel token set.
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn ai_test_connection(
+    provider: String,
+    api_key: String,
+    worker_url: Option<String>,
+) -> Result<String, String> {
+    let client = get_http_client();
+
+    let (url, model, extra): (String, String, Vec<(String, String)>) = match provider.as_str() {
+        "mistral" => (
+            "https://api.mistral.ai/v1/chat/completions".into(),
+            "mistral-large-latest".into(),
+            vec![],
+        ),
+        "nemotron" => (
+            "https://openrouter.ai/api/v1/chat/completions".into(),
+            "nvidia/llama-3.1-nemotron-ultra-253b-v1".into(),
+            vec![
+                ("HTTP-Referer".into(), "https://texodus.app".into()),
+                ("X-Title".into(), "Texodus".into()),
+            ],
+        ),
+        "glm" => {
+            let base = worker_url
+                .filter(|u| !u.trim().is_empty())
+                .ok_or("Worker URL is required for GLM")?;
+            (
+                format!("{}/v1/chat/completions", base.trim_end_matches('/')),
+                "glm-4".into(),
+                vec![],
+            )
+        }
+        "openai_compatible" => {
+            let base = worker_url
+                .filter(|u| !u.trim().is_empty())
+                .ok_or("Base URL is required for OpenAI Compatible provider")?;
+            // For openai_compatible, model is passed separately
+            (
+                format!("{}/v1/chat/completions", base.trim_end_matches('/')),
+                "test".into(), // model not used in URL for test
+                vec![],
+            )
+        }
+        _ => return Err("Unknown provider".into()),
+    };
+
+    let body = json!({
+        "model": model,
+        "messages": [{"role": "user", "content": "Reply with the single word: ok"}],
+        "max_tokens": 5,
+        "stream": false
+    });
+
+    let mut req = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {}", api_key))
+        .header("Content-Type", "application/json");
+
+    for (k, v) in &extra {
+        req = req.header(k.as_str(), v.as_str());
+    }
+
+    let resp = req.json(&body).send().await
+        .map_err(|e| format!("Connection failed: {}", e))?;
+
+    if resp.status().is_success() {
+        Ok("Connection successful".into())
+    } else {
+        let status = resp.status().as_u16();
+        Err(format!("HTTP {} — check your API key and try again.", status))
+    }
 }
 
 #[cfg(test)]

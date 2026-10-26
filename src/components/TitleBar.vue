@@ -47,6 +47,14 @@
       <DocumentStatsMenu />
       <ExportMenu />
 
+      <button
+        id="btn-ai"
+        class="tb-btn"
+        :class="{ active: aiPanelOpen }"
+        title="AI Assistant (Cmd/Ctrl+Shift+A)"
+        @click="emit('toggle-ai')"
+      >✦ AI</button>
+
       <button id="btn-theme" class="tb-btn icon-only" :title="`Theme: ${themeLabel}`" @click="emit('cycle-theme')">
         <span class="tb-icon" :style="{ '--icon': `url(${themeIcon})` }"></span>
       </button>
@@ -73,14 +81,17 @@ import iconThemeLight from '../assets/icons/icons8-sun-100.png';
 import iconThemeDark from '../assets/icons/icons8-do-not-disturb-ios-100.png';
 import iconSidebar from '../assets/icons/icons8-sidebar-100.png';
 import iconSearch from '../assets/icons/icons8-search-100.png';
+import iconAI from '../assets/icons/icons8-ai-100.png';
 
 const props = withDefaults(defineProps<{
   layoutMode: LayoutMode;
   themeMode: ThemeMode;
   sidebarVisible: boolean;
   title?: string;
+  aiPanelOpen?: boolean;
 }>(), {
   title: 'Texodus',
+  aiPanelOpen: false,
 });
 
 const emit = defineEmits<{
@@ -88,6 +99,7 @@ const emit = defineEmits<{
   'toggle-sidebar': [];
   'cycle-theme': [];
   format: [command: string];
+  'toggle-ai': [];
 }>();
 
 const { isOpen: searchOpen, open: openSearch, close: closeSearch } = useDocumentSearch();
@@ -154,7 +166,7 @@ const themeIcon = computed(() => {
 .titlebar-controls {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 4px;
   justify-content: flex-end;
 }
 

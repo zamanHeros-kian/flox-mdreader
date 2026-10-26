@@ -43,6 +43,11 @@
     "shell:default",
     "shell:allow-open",
     "core:window:allow-start-dragging",
-    "window-state:default"
+    "window-state:default",
+    "store:allow-get",
+    "store:allow-set",
+    "store:allow-delete",
+    "store:allow-load",
+    "store:allow-save"
   ]
 }
